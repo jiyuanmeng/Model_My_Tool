@@ -1,0 +1,3 @@
+--结果插入到月表
+insert into  hb.t_train_yw_kb_202405
+SELECT * FROM hb.t_train_yw_kb_202405_1_10

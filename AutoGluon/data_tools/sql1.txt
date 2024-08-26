@@ -1,0 +1,169 @@
+-- 连接表1-4并生成中间表
+insert into  hb.t_train_yw_kb_202405_1_4 
+SELECT *
+FROM (
+    --1.以B域业务宽表作为主表：
+    SELECT 
+        cp.called_no, cp.ques1, cp.ques2, cp.ques3, cp.ques4,
+--        (toFloat64(cp.`q2_net_voice_score`) + toFloat64(cp.`q3_net_intnet_score`))/2 as yw_net_score,
+--        (toFloat64(cp.`q4_fee_propaganda_score`) + toFloat64(cp.`q5_fee_packagerule_score`)+ toFloat64(cp.`q6_fee_consumption_score`))/3 as yw_fee_score,
+--        ( toFloat64(cp.`q7b_ser_chnl_hall_score`)  + toFloat64(cp.`q7c_ser_chnl_hotline_score`)+ toFloat64(cp.`q7d_ser_chnl_elect_score`))/3 as yw_channel_score,
+--        cp.`q8_over_score` as overall_score, 
+         lht.*, 
+     -- 分割app_cs字段，取前5个APP名称
+        arrayElement(splitByString(',', COALESCE(lht.app_cs,'NULL')), 1) AS app_cs_1,
+        arrayElement(splitByString(',', COALESCE(lht.app_cs,'NULL')), 2) AS app_cs_2,
+        arrayElement(splitByString(',', COALESCE(lht.app_cs,'NULL')), 3) AS app_cs_3,
+        arrayElement(splitByString(',', COALESCE(lht.app_cs,'NULL')), 4) AS app_cs_4,
+        arrayElement(splitByString(',', COALESCE(lht.app_cs,'NULL')), 5) AS app_cs_5,
+        -- 分割app_sc字段，取前5个APP名称
+        arrayElement(splitByString(',', COALESCE(lht.app_sc,'NULL')), 1) AS app_sc_1,
+        arrayElement(splitByString(',', COALESCE(lht.app_sc,'NULL')), 2) AS app_sc_2,
+        arrayElement(splitByString(',', COALESCE(lht.app_sc,'NULL')), 3) AS app_sc_3,
+        arrayElement(splitByString(',', COALESCE(lht.app_sc,'NULL')), 4) AS app_sc_4,
+        arrayElement(splitByString(',', COALESCE(lht.app_sc,'NULL')), 5) AS app_sc_5
+    FROM 
+        hb.dwa_m_cust_percep_predic_mon lht
+    INNER JOIN  hb.hb_local_yw_satisfaction_survey cp
+            ON lht.month_id = REPLACE(SUBSTRING(cp.`work_start_time`, 1, 8), '-', '') 
+              AND lht.device_number = cp.`called_no`
+    WHERE lht.tele_type_desc='移网号码'
+ ) t
+left join (
+    --2.45g感知表相关指标
+    select 
+      substring(a.day_id,1,6) as month_id,
+      LOWER(HEX(MD5 (a.msisdn))) as device_number,
+      AVG(toFloat64(a.sau_video_sucess_ratio)) `视频播放成功率`,
+      AVG(toFloat64(a.sau_avginitbufferduration)) `视频初始缓存平均时延(单位:毫秒) `,
+      AVG(toFloat64(a.sau_avgvideodlrate)) `视频流下载速率(内容>=50KB)(单位:kbps)`,
+      AVG(toFloat64(a.sau_videobufferrate)) `视频卡顿率`,
+      AVG(toFloat64(a.sau_avgvideobufferduration)) `平均卡顿时长(单位:毫秒)`,
+      AVG(toFloat64(a.sau_imloginsuccratio)) `IM登录成功率`,
+      AVG(toFloat64(a.sau_weballresratio)) `HTTP页面响应成功率`,
+      AVG(toFloat64(a.sau_avgwebresdelay)) `页面响应平均时延(单位:毫秒)`,
+      AVG(toFloat64(a.sau_tcpconnsuccratio)) `TCP建立成功率`,
+      AVG(toFloat64(a.sau_avgtcpconndelay)) `TCP建立平均时延(单位:毫秒)`,
+      AVG(toFloat64(a.sau_avgwebdlrate)) `HTTP下载平均速率内容>=50KB`,
+      AVG(toFloat64(a.sau_dnsressuccratio)) `DNS解析成功率`,
+      AVG(toFloat64(a.sau_game_tcpconnsuccratio)) `GAME-TCP建链成功率`,
+      AVG(toFloat64(a.sau_game_avgtcpconndelay)) `GAME-TCP建链成功平均时延(单位:毫秒)`,
+      AVG(toFloat64(a.sau_gameloginsuccratio)) `游戏登录成功率`,
+      AVG(toFloat64(a.s1_rate_totalattach_succ)) `Attach成功率`,
+      AVG(toFloat64(a.s1_avgdelay_totalattach)) `Attach平均时延(单位:毫秒)`,
+      AVG(toFloat64(a.s1_rate_totaltau_succ)) `TAU成功率`,
+      AVG(toFloat64(a.s1_cnt_totaltau_avgdelay)) `TAU平均时延(单位:毫秒)`
+    from hb.ads_pub_wlsjs_14_45g_experience_d_inc a
+    where not (s1_avgdelay_totalattach is null
+          and s1_cnt_totaltau_avgdelay is NULL
+          and s1_rate_totalattach_succ is NULL
+          and s1_rate_totaltau_succ is NULL
+          and sau_avginitbufferduration is NULL
+          and sau_avgtcpconndelay is NULL
+          and sau_avgvideobufferduration is NULL
+          and sau_avgvideodlrate is NULL
+          and sau_avgwebdlrate is NULL
+          and sau_avgwebresdelay is null
+          and sau_dnsressuccratio is NULL
+          and sau_game_avgtcpconndelay is null
+          and sau_game_tcpconnsuccratio is null
+          and sau_gameloginsuccratio is null
+          and sau_imloginsuccratio is null
+          and sau_tcpconnsuccratio is null
+          and sau_video_sucess_ratio is null
+          and sau_videobufferrate is null
+          and sau_weballresratio is null)  
+          and month_id = '{month_id}'
+    group by substring(a.day_id,1,6) ,a.msisdn 
+) gz
+on gz.month_id=t.month_id
+and gz.device_number=t.device_number 
+left join (
+    -- 3.nps_call通话专题分析表相关指标
+    select 
+        substr(a.date_time,1,6) as month_id,--yyyymmdd格式，暂一个月只存有一天数据
+        LOWER(HEX(MD5 (a.msisdn))) AS device_number,
+        avg(toFloat64(a.user_call_001)) as `3G接通次数`,
+        avg(toFloat64(a.user_call_002)) as `3G试呼次数`,
+        avg(toFloat64(a.user_call_003)) as `2G接通次数`,
+        avg(toFloat64(a.user_call_004)) as `2G试呼次数`,
+        avg(toFloat64(a.user_call_005)) as `3G无线掉话次数`,
+        avg(toFloat64(a.user_call_006)) as `3G应答掉话率分母`,
+        avg(toFloat64(a.user_call_007)) as `2G无线掉话次数`,
+        avg(toFloat64(a.user_call_008)) as `2G应答掉话率分母`,
+        avg(toFloat64(a.user_call_009)) as `VOLTE始呼接通次数`,
+        avg(toFloat64(a.user_call_010)) as `VOLTE始呼请求次数`,
+        avg(toFloat64(a.user_call_011)) as `VOLTE掉话次数语音`,
+        avg(toFloat64(a.user_call_012)) as `VOLTE呼叫应答成功次数音频`,
+        avg(toFloat64(a.user_call_013)) as `volte主叫语音未接通次数`,
+        avg(toFloat64(a.user_call_014)) as `volte被叫语音未接通次数`,
+        avg(toFloat64(a.user_call_015)) as `VOLTEVMOS`,
+        avg(toFloat64(a.user_call_016)) as `VOLTE断续次数`,
+        avg(toFloat64(a.user_call_017)) as `VOLTE异常释放`,
+        avg(toFloat64(a.user_call_018)) as `VOLTE单通次数`,
+        avg(toFloat64(a.user_call_019)) as `VOLTE掉话次数`,
+        avg(toFloat64(a.volte_vmos1)) as `VOLTEVMOS1`,
+        avg(toFloat64(a.volte_vmos2)) as `VOLTEVMOS2`,
+        avg(toFloat64(a.volte_mos_session_base_014)) as `VOLTE会话次数`,
+        avg(toFloat64(a.volte_mos_session_base_001)) as `VOLTE上行总时延`,
+        avg(toFloat64(a.volte_mos_session_base_002)) as `VOLTE上行时延计数`,
+        avg(toFloat64(a.volte_mos_session_base_003)) as `VOLTE下行总时延`,
+        avg(toFloat64(a.volte_mos_session_base_004)) as `VOLTE下行时延计数`,
+        avg(toFloat64(a.volte_sip_base_011)) as `VOLTE话务量`,
+        avg(toFloat64(a.volte_mos_session_base_005)) as `VOLTERTP上行期望包数`,
+        avg(toFloat64(a.volte_mos_session_base_006)) as `VOLTERTP上行丢包数`,
+        avg(toFloat64(a.volte_mos_session_base_007)) as `VOLTERTP下行期望包数`,
+        avg(toFloat64(a.volte_mos_session_base_008)) as `VOLTERTP下行丢包数`,
+        avg(toFloat64(a.lte_s11_base_005)) as `LTE S11创建承载请求次数(QCI=2)`,
+        avg(toFloat64(a.lte_s11_base_006)) as `LTE S11创建承载成功次数(QCI=2)`,
+        avg(toFloat64(a.lte_s11_base_009)) as `LTE S11修改承载成功次数(QCI=1)`,
+        avg(toFloat64(a.volte_voice_ul_mos_less_3_times)) as `VOLTE RTCP上行MOS值≤3的次数`,
+        avg(toFloat64(a.volte_voice_ul_mos_stat_times)) as `VOLTE RTCP上行MOS值出现总次数`,
+        avg(toFloat64(a.volte_voice_dl_mos_less_3_times)) as `VOLTE RTCP下行MOS值≤3的次数`,
+        avg(toFloat64(a.volte_voice_dl_mos_stat_times)) as `VOLTERTCP下行MOS值出现总次数`
+    from 
+        hb.ads_pub_wlsjs_6_npscomplaint_call_w_inc a
+    where month_id = '{month_id}'
+    group by substr(a.date_time,1,6), a.msisdn
+    ) nps_call
+on nps_call.month_id = t.month_id
+and nps_call.device_number = t.device_number
+left join  (
+  -- 4.nps_user通话专题分析表2相关指标 
+    SELECT 
+        substr(a.date_time,1,6) as month_id, --yyyymmdd格式，暂一个月只存有一天数据
+        LOWER(HEX(MD5 (a.msisdn))) AS device_number,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_001, '0.0' ) AS FLOAT ) ) as `TCP建立总时延`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_002, '0.0' ) AS FLOAT ) ) as `上行TCP建立请求次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_003, '0.0' ) AS FLOAT ) ) as `上行TCP建立成功次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_004, '0.0' ) AS FLOAT ) ) as `下行TCP建立成功次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_005, '0.0' ) AS FLOAT ) ) as `上行TCP包数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_006, '0.0' ) AS FLOAT ) ) as `下行TCP包数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_007, '0.0' ) AS FLOAT ) ) as `上行TCP重传包数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_008, '0.0' ) AS FLOAT ) ) as `下行TCP重传包数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_009, '0.0' ) AS FLOAT ) ) as `RTT上行总时延`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_010, '0.0' ) AS FLOAT ) ) as `RTT上行次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_011, '0.0' ) AS FLOAT ) ) as `RTT下行总时延`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_012, '0.0' ) AS FLOAT ) ) as `RTT下行次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_013, '0.0' ) AS FLOAT ) ) as `页面请求次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_014, '0.0' ) AS FLOAT ) ) as `页面响应成功次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_015, '0.0' ) AS FLOAT ) ) as `TCP建立总时延超长次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_016, '0.0' ) AS FLOAT ) ) as `下行TCP建立成功率低次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_017, '0.0' ) AS FLOAT ) ) as `上行TCP重传比例低次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_018, '0.0' ) AS FLOAT ) ) as `下行TCP重传比例低次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_019, '0.0' ) AS FLOAT ) ) as `4GRTT下行平均时延超300次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_020, '0.0' ) AS FLOAT ) ) as `4GRTT上行平均时延超300次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_021, '0.0' ) AS FLOAT ) ) as `5GRTT下行平均时延超100次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_022, '0.0' ) AS FLOAT ) ) as `5GRTT上行平均时延超100次数`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_c_006, '0.0' ) AS FLOAT ) ) as `HTTP响应成功率`,
+        AVG ( CAST ( IFNULL ( user_npscomplaint_c_007, '0.0' ) AS FLOAT ) ) as `TCP重传率`
+    FROM
+        hb.ads_pub_wlsjs_6_user_npscomplaint_w_inc a 
+    where 
+        month_id = '{month_id}'
+    GROUP BY
+        substr(a.date_time,1,6) , a.msisdn
+    ) nps_user
+on nps_user.month_id = t.month_id
+and nps_user.device_number = t.device_number
+WHERE t.month_id ='{month_id}' AND t.area_name ='{area_name}'

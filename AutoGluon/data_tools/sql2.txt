@@ -1,0 +1,170 @@
+-- 连接表5-7并生成中间表
+insert into  hb.t_train_yw_kb_202405_1_7
+SELECT * FROM hb.t_train_yw_kb_202405_1_4 t
+LEFT JOIN (  
+  --5.工单相关指标：
+  -- 先处理工单表，同一条工单SHEET_ID有重复的，取dai_id排序
+    WITH latest_sheets AS (
+        SELECT 
+            SHEET_ID,
+            SHEET_TYPE_ID,
+            CHANNEL_ID,
+            DUTY_REASON_NAME,
+            IS_UPGRADE,
+            IS_TIMEOUT_JF,
+            CP_SATISFACTION,
+            CP_IS_OK,
+            CP_TIMELY_CONTACT,
+            NATURE_ACTUAL_TOTAL_LEN,
+            ACCEPT_TIME,
+            BUSI_NUMBER,
+            BUSINO_AREA_NAME,
+            REPLACE(SUBSTRING(ACCEPT_TIME, 1, 7), '-', '')  AS month_id, --按工单受理时间匹配月份
+            REPLACE(SUBSTRING(ACCEPT_TIME, 1, 10), '-', '') AS day_id,--按工单受理时间匹配日期
+            -- 使用窗口函数row_number()来找出每个SHEET_ID最新的记录
+            row_number() OVER (PARTITION BY SHEET_ID ORDER BY MONTH_ID DESC,DAY_ID DESC) AS rn
+        FROM 
+            hb.dwd_d_evt_kf_high_quality_report
+    )
+    SELECT 
+       tmp_a.device_number,
+       tmp_a.month_id,
+       tmp_b.BUSINO_AREA_NAME,
+       sum(case when  tmp_b.MONTH_ID!=''and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as `近6个月累计工单次数`,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.SHEET_TYPE_ID='01' and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月投诉工单次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.SHEET_TYPE_ID='04' and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月故障工单次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.CHANNEL_ID in ('04','05')and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月申诉次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_a.month_id=tmp_b.MONTH_ID  then 1 else 0 end) as `当月累计工单次数`,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.SHEET_TYPE_ID='01' and tmp_a.month_id=tmp_b.MONTH_ID  then 1 else 0 end) as  `当月累计投诉工单次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.SHEET_TYPE_ID='04' and tmp_a.month_id=tmp_b.MONTH_ID  then 1 else 0 end) as  `当月累计故障工单次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and (tmp_b.DUTY_REASON_NAME like '移网质量%' or tmp_b.DUTY_REASON_NAME like '固网质量%') and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01'))- interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月网络质量投诉次数`,
+        sum(case when tmp_b.MONTH_ID!=''and  tmp_b.IS_UPGRADE='1' and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01'))- interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月升级投诉次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and  tmp_b.IS_TIMEOUT_JF='1' and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01'))- interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月工单超时次数`,
+        sum(case when tmp_b.MONTH_ID!=''and  tmp_b.CP_SATISFACTION='1' and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01'))- interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月工单满意次数` ,
+               sum(case when tmp_b.MONTH_ID!=''and  tmp_b.CP_IS_OK='1' and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月工单解决次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.CP_TIMELY_CONTACT='1' and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01'))- interval 6 month<=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) then 1 else 0 end) as  `近6个月工单响应次数` ,
+        sum(CASE WHEN tmp_b.MONTH_ID!=''and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01'))- interval 6 month <= toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) and toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >=toDate(concat(substring(tmp_b.MONTH_ID, 1, 4), '-', substring(tmp_b.MONTH_ID, 5, 2), '-01')) THEN toFloat32(tmp_b.NATURE_ACTUAL_TOTAL_LEN) ELSE 0 END) as  `近6个月工单总处理自然时长` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.IS_TIMEOUT_JF='1' and  tmp_a.month_id=tmp_b.MONTH_ID  then 1 else 0 end) as  `当月累计工单超时次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.CP_SATISFACTION='1' and tmp_a.month_id=tmp_b.MONTH_ID  then 1 else 0 end) as  `当月累计工单满意次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.CP_IS_OK='1' and tmp_a.month_id=tmp_b.MONTH_ID  then 1 else 0 end) as  `当月累计工单解决次数` ,
+        sum(case when tmp_b.MONTH_ID!=''and tmp_b.CP_TIMELY_CONTACT='1' and tmp_a.month_id=tmp_b.MONTH_ID  then 1 else 0 end) as  `当月累计工单响应次数` ,
+        `近6个月工单超时次数`/`近6个月累计工单次数` as `近6个月工单超时率`, 
+        `近6个月工单满意次数`/`近6个月累计工单次数` as `近6个月工单满意率`,
+        `近6个月工单解决次数`/`近6个月累计工单次数` as `近6个月工单解决率`,
+        `近6个月工单响应次数`/`近6个月累计工单次数` as `近6个月工单响应率`,
+        `近6个月工单总处理自然时长` /`近6个月累计工单次数` as `近6个月工单平均处理自然时长`,
+        `当月累计工单超时次数`/`当月累计工单次数` as `当月累计工单超时率`,
+        `当月累计工单满意次数`/`当月累计工单次数` as `当月累计工单满意率`,
+        `当月累计工单解决次数`/`当月累计工单次数` as `当月累计工单解决率`,
+        `当月累计工单响应次数`/`当月累计工单次数` as `当月累计工单响应率`       
+   FROM   hb.dwa_m_cust_percep_predic_mon tmp_a
+   LEFT JOIN (    SELECT 
+                        b.SHEET_TYPE_ID,
+                        b.CHANNEL_ID,
+                        b.DUTY_REASON_NAME,
+                        b.IS_UPGRADE,
+                        b.IS_TIMEOUT_JF,
+                        b.CP_SATISFACTION,
+                        b.CP_IS_OK,
+                        b.CP_TIMELY_CONTACT,
+                        b.NATURE_ACTUAL_TOTAL_LEN,
+                        b.ACCEPT_TIME,
+                        b.month_id as MONTH_ID,
+                        b.BUSI_NUMBER,
+                        b.BUSINO_AREA_NAME
+                   FROM latest_sheets b
+                   WHERE b.rn = 1 -- 只选择最新的记录
+              ) tmp_b
+    ON tmp_a.device_number=LOWER(HEX(MD5 (tmp_b.BUSI_NUMBER)))
+    GROUP BY  tmp_a.month_id, tmp_b.BUSINO_AREA_NAME, tmp_a.device_number
+    having tmp_a.month_id ='{month_id}' and tmp_b.BUSINO_AREA_NAME = '{area_name}'
+) gd
+on gd.month_id = t.month_id
+and gd.device_number = t.device_number
+and gd.BUSINO_AREA_NAME=t.area_name
+LEFT JOIN (
+   -- 6.客服接触记录相关指标
+    SELECT 
+        tmp_a.device_number,
+        tmp_a.month_id,
+        case ddkjms.CODE_CUST_CITY when '0030' then '雄安新区'
+              when '0310' then '邯郸' 
+              when '0311' then '石家庄'
+              when '0312' then '保定' 
+              when '0313' then '张家口' 
+              when '0314' then '承德'
+              when '0315' then '唐山' 
+              when '0316' then '廊坊' 
+              when '0317' then '沧州' 
+              when '0318' then '衡水' 
+              when '0319' then '邢台' 
+              when '0335' then '秦皇岛' end cust_city_name,
+        -- 计算近3个月拨打客服热线的次数
+        sum(CASE 
+            WHEN toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) AS `热线-近3个月拨打客服热线次数`,
+        -- 计算当月拨打客服热线的次数
+        sum(CASE WHEN tmp_a.month_id = ddkjms.MONTH_ID THEN 1 ELSE 0 END) AS `热线-月累计拨打次数`,
+        -- 计算近3个月累计解决的问题数
+        sum(CASE 
+            WHEN substring(CODE_SATISFICATION, 1, 1) = '1' 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) AS `热线-近3个月累计解决数`,
+        -- 计算近3个月累计满意的问题数
+        sum(CASE 
+            WHEN substring(CODE_SATISFICATION, 2, 1) = '1' 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) AS `热线-近3个月累计满意数`,
+                    -- 计算近3个月的解决率
+        sum(CASE 
+            WHEN substring(CODE_SATISFICATION, 1, 1) = '1' 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) / 
+        sum(CASE 
+            WHEN toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) AS `热线-近3个月累计解决率`,
+        -- 计算近3个月的满意度
+        sum(CASE 
+            WHEN substring(CODE_SATISFICATION, 2, 1) = '1' 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) / 
+        sum(CASE 
+            WHEN toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddkjms.MONTH_ID, 1, 4), '-', substring(ddkjms.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) AS `热线-近3个月累计满意度`
+    FROM  hb.dwa_m_cust_percep_predic_mon tmp_a
+    LEFT JOIN hb.dwd_d_evt_kf_jc_manual_seat ddkjms 
+    ON tmp_a.device_number = LOWER(HEX(MD5 (ddkjms.SERVICE_NO)))
+    GROUP BY tmp_a.device_number, tmp_a.month_id ,cust_city_name
+    having  tmp_a.month_id ='{month_id}' and cust_city_name = '{area_name}'
+) JCJL
+ON JCJL.device_number = t.device_number
+AND JCJL.month_id = t.month_id
+AND JCJL.cust_city_name = t.area_name
+LEFT JOIN (
+  --7. 服务请求的子查询 
+    SELECT 
+        tmp_a.device_number,
+        tmp_a.month_id, 
+        tmp_a.area_name,
+        -- 计算近3个月的投诉和故障次数
+        SUM(CASE 
+            WHEN (SERVICE_TYPE_NAME1 LIKE '%故障%' OR SERVICE_TYPE_NAME1 LIKE '%投诉%') 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) - INTERVAL 3 MONTH <= toDate(concat(substring(ddekjsr.MONTH_ID, 1, 4), '-', substring(ddekjsr.MONTH_ID, 5, 2), '-01')) 
+            AND toDate(concat(substring(tmp_a.month_id, 1, 4), '-', substring(tmp_a.month_id, 5, 2), '-01')) >= toDate(concat(substring(ddekjsr.MONTH_ID, 1, 4), '-', substring(ddekjsr.MONTH_ID, 5, 2), '-01')) 
+            THEN 1 ELSE 0 END) AS `热线-近3个月累计故障或投诉量`
+    FROM   hb.dwa_m_cust_percep_predic_mon  tmp_a
+    INNER JOIN hb.dwd_d_evt_kf_jc_svc_request ddekjsr 
+    ON tmp_a.device_number = LOWER(HEX(MD5 (ddekjsr.MOBILE_NO))) 
+    GROUP BY tmp_a.device_number, tmp_a.month_id,tmp_a.area_name
+    having  tmp_a.month_id ='{month_id}' and tmp_a.area_name = '{area_name}'
+) fwqq
+ON fwqq.device_number = t.device_number
+AND fwqq.month_id = t.month_id
+AND fwqq.area_name = t.area_name

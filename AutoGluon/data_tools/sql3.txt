@@ -1,0 +1,533 @@
+-- 连接表8-10并生成中间表
+insert into  hb.t_train_yw_kb_202405_1_10
+SELECT DISTINCT * FROM(
+SELECT * FROM hb.t_train_yw_kb_202405_1_7 t
+LEFT JOIN (
+  -- 8.小区告警数据指标 
+  WITH user_cells AS (
+      SELECT 
+          t.device_number,
+          t.month_id,
+          a.day_id,
+          a.cell_most,
+          t.area_name,
+      FROM 
+          hb.dwa_m_cust_percep_predic_mon AS t
+      LEFT JOIN 
+          hb.ads_pub_wlsjs_57_hprov_up_user_top_cell_d_inc AS a
+      ON t.device_number = LOWER(HEX(MD5 (a.msisdn)))
+      AND a.cell_most > '0' AND length(a.day_id) >= 8
+      WHERE 
+          substring(a.day_id, 1, 6) BETWEEN date_format(date_sub(toDate(concat(t.month_id, '01')), INTERVAL 3 MONTH), '%Y%m') AND t.month_id
+      GROUP BY t.device_number,t.month_id,a.day_id,a.cell_most, t.area_name
+  )
+  SELECT 
+      uc.device_number,
+      uc.month_id,
+      uc.area_name,
+      SUM(CASE 
+              WHEN  o1.ECI IS NOT NULL OR o2.ECI IS NOT NULL 
+              THEN 1 
+              ELSE 0 
+          END) AS `近3个月小区告警数量`
+  FROM 
+      user_cells AS uc
+  LEFT JOIN 
+      hb.ods_m_noap_warn AS o1
+      ON substr(uc.day_id,1,6) = o1.MONTH_ID
+      AND o1.ALARMSEVERITY<>'四级告警'
+      AND o1.ECI = '127.' || floor(CAST(uc.cell_most AS Int) / 256) || '.' || floor(CAST(uc.cell_most AS Int) % 256)
+  LEFT JOIN 
+      hb.ods_m_noap_warn AS o2
+      ON substr(uc.day_id,1,6) = o2.MONTH_ID
+      AND o2.ALARMSEVERITY<>'四级告警'
+      AND o2.ECI = '127.' || floor(CAST(uc.cell_most AS Int) / 4096) || '.' || floor(CAST(uc.cell_most AS Int) % 4096)
+  GROUP BY uc.device_number,uc.month_id,uc.area_name
+  having uc.month_id = '{month_id}' and uc.area_name = '{area_name}'
+) gaoj
+on gaoj.device_number=t.device_number
+and gaoj.month_id=t.month_id
+and gaoj.area_name=t.area_name
+LEFT JOIN (
+  --9.小区性能指标：
+  WITH base_data AS (
+  SELECT
+  substring(a.day_id, 1, 6) as month_id,
+  LOWER(HEX(MD5 (a.msisdn))) as device_number ,
+  case a.hcity_name 
+        when '邯郸市' then '邯郸' 
+        when '石家庄市' then '石家庄'
+        when '保定市' then '保定' 
+        when '张家口市' then '张家口' 
+        when '承德市' then '承德'
+        when '唐山市' then '唐山' 
+        when '廊坊市' then '廊坊' 
+        when '沧州市' then '沧州' 
+        when '衡水市' then '衡水' 
+        when '邢台市' then '邢台' 
+        when '秦皇岛市' then '秦皇岛' end hcity_name,
+  '127.'||floor(cast(COALESCE(a.cell_most,'0') as int)/256)||'.'||floor(cast(COALESCE(a.cell_most,'0')  as int)%256) AS ECI_1,
+  '127.'||floor(cast(COALESCE(a.cell_most,'0')  as int)/4096)||'.'||floor(cast(COALESCE(a.cell_most,'0')  as int)%4096) AS ECI_2
+  FROM  hb.ads_pub_wlsjs_57_hprov_up_user_top_cell_d_inc a 
+  WHERE cell_most>'0'
+  --AND substring(a.day_id, 1, 6)='202401'
+  GROUP BY device_number, month_id,cell_most,hcity_name
+  ),
+  aggregated_noap_4g AS (
+      SELECT
+          MONTH_ID,
+          ECI,
+          AVG(toFloat64(RRC_MAX)) AS rrc_max_4g,
+          AVG(toFloat64(PDCCH_SIGNAL_OCCUPY_RATIO)) AS pdcch_signal_occupy_ratio_4g,
+          AVG(toFloat64(RRC_AVG)) AS rrc_avg_4g,
+          AVG(toFloat64(UL_PRB_AVG)) AS ul_prb_avg_4g,
+          AVG(toFloat64(DL_PRB_AVG)) AS dl_prb_avg_4g,
+          AVG(toFloat64(WEAK_COVERAGE_RATIO_1D)) AS weak_coverage_ratio_1d_4g,
+          AVG(toFloat64(NOISE)) AS noise_4g,
+          AVG(toFloat64(RADIO_CONN_SUC_R)) AS radio_conn_suc_r_4g,
+          AVG(toFloat64(HO_OUT_SUC_R)) AS ho_out_suc_r_4g
+      FROM hb.ods_d_noap_move_net_4g
+      GROUP BY MONTH_ID,ECI
+  ),
+  aggregated_noap_5g AS (
+      SELECT
+          MONTH_ID,
+          ECI,
+          AVG(toFloat64(RRC_MAX)) AS rrc_max_5g,
+          AVG(toFloat64(PDCCH_SIGNAL_OCCUPY_RATIO)) AS pdcch_signal_occupy_ratio_5g,
+          AVG(toFloat64(RRC_AVG)) AS rrc_avg_5g,
+          AVG(toFloat64(UL_PRB_AVG)) AS ul_prb_avg_5g,
+          AVG(toFloat64(DL_PRB_AVG)) AS dl_prb_avg_5g,
+          AVG(toFloat64(WEAK_COVERAGE_RATIO_1D)) AS weak_coverage_ratio_1d_5g,
+          AVG(toFloat64(NOISE)) AS noise_5g,
+          AVG(toFloat64(RADIO_CONN_SUC_R)) AS radio_conn_suc_r_5g,
+          AVG(toFloat64(HO_OUT_SUC_R)) AS ho_out_suc_r_5g
+      FROM hb.ods_d_noap_move_net_5g
+      GROUP BY MONTH_ID,ECI
+  )
+  SELECT
+      base.device_number,
+      base.month_id,
+      base.hcity_name,
+      AVG(COALESCE(ag_4g.rrc_max_4g, ag_5g.rrc_max_5g)) AS `有效RRC连接最大数`,
+      AVG(COALESCE(ag_4g.pdcch_signal_occupy_ratio_4g, ag_5g.pdcch_signal_occupy_ratio_5g)) AS `PDCCH信道CCE占用率`,
+      AVG(COALESCE(ag_4g.rrc_avg_4g, ag_5g.rrc_avg_5g)) AS `有效RRC连接平均数`,
+      AVG(COALESCE(ag_4g.ul_prb_avg_4g, ag_5g.ul_prb_avg_5g)) AS `上行PRB平均利用率`,
+      AVG(COALESCE(ag_4g.dl_prb_avg_4g, ag_5g.dl_prb_avg_5g)) AS `下行PRB平均利用率`,
+      AVG(COALESCE(ag_4g.weak_coverage_ratio_1d_4g, ag_5g.weak_coverage_ratio_1d_5g)) AS `覆盖率`,
+      AVG(COALESCE(ag_4g.noise_4g, ag_5g.noise_5g)) AS `上行平均干扰电平`,
+      AVG(COALESCE(ag_4g.radio_conn_suc_r_4g, ag_5g.radio_conn_suc_r_5g)) AS `无线接通率`,
+      AVG(COALESCE(ag_4g.ho_out_suc_r_4g, ag_5g.ho_out_suc_r_5g)) AS `切换成功率`
+  FROM base_data base
+  LEFT JOIN aggregated_noap_4g ag_4g
+      ON base.ECI_1 = ag_4g.ECI
+      AND base.month_id = ag_4g.MONTH_ID
+  LEFT JOIN aggregated_noap_5g ag_5g
+      ON base.ECI_2 = ag_5g.ECI
+      AND base.month_id = ag_5g.MONTH_ID
+  GROUP BY base.device_number, base.month_id ,base.hcity_name
+  having base.month_id = '{month_id}' and base.hcity_name = '{area_name}'
+)XQXN
+on XQXN.device_number=t.device_number
+and XQXN.month_id=t.month_id
+and XQXN.hcity_name=t.area_name
+left join (
+  --10.用户互联网应用指标：
+  WITH SERV_CELL_APP AS
+  (SELECT * FROM  hb.dws_user_serviceaware_cell_app_exp_d_inc )
+  select
+    substring(a.batch_no,1,6) month_id,
+    LOWER(HEX(MD5 (a.msisdn))) device_number,
+    case a.h_city 
+          when '130400' then '邯郸' 
+          when '130100' then '石家庄'
+          when '130600' then '保定' 
+          when '130700' then '张家口' 
+          when '130800' then '承德'
+          when '130200' then '唐山' 
+          when '131000' then '廊坊' 
+          when '130600' then '沧州' 
+          when '131100' then '衡水' 
+          when '130500' then '邢台' 
+          when '130300' then '秦皇岛' end h_city,
+      AVG(toFloat64(a.roaming_type)),
+      AVG(toFloat64(a.service_id)),
+      AVG(toFloat64(a.videoqual)),
+      AVG(toFloat64(a.xdr_count)),
+      AVG(toFloat64(a.ul_traffic)),
+      AVG(toFloat64(a.dl_traffic)),
+      AVG(toFloat64(a.total_dura)),
+      AVG(toFloat64(a.tcp_conn_req_times)),
+      AVG(toFloat64(a.tcp_conn_succ_times)),
+      AVG(toFloat64(a.tcp_ul_conn_fail_times)),
+      AVG(toFloat64(a.tcp_dl_conn_fail_times)),
+      AVG(toFloat64(a.tcp_conn_total_delay)),
+      AVG(toFloat64(a.tcp_ul_conn_total_delay)),
+      AVG(toFloat64(a.tcp_dl_conn_total_delay)),
+      AVG(toFloat64(a.tcp_conn_delay_stat_times)),
+      AVG(toFloat64(a.tcp_ul_rtt_total_delay)),
+      AVG(toFloat64(a.tcp_dl_rtt_total_delay)),
+      AVG(toFloat64(a.tcp_ul_rtt_stat_times)),
+      AVG(toFloat64(a.tcp_dl_rtt_stat_times)),
+      AVG(toFloat64(a.tcp_ul_disord_packet_num)),
+      AVG(toFloat64(a.tcp_dl_disord_packet_num)),
+      AVG(toFloat64(a.tcp_ul_retrans_packet_num)),
+      AVG(toFloat64(a.tcp_dl_retrans_packet_num)),
+      AVG(toFloat64(a.tcp_ul_packet_num)),
+      AVG(toFloat64(a.tcp_dl_packet_num)),
+      AVG(toFloat64(a.tcp_retrans_packet_num)),
+      AVG(toFloat64(a.tcp_conn_delay_long_times)),
+      AVG(toFloat64(a.tcp_ul_retrans_ratio_low_times)),
+      AVG(toFloat64(a.tcp_dl_retrans_ratio_low_times)),
+      AVG(toFloat64(a.tcp_ul_avg_rtt_long_times)),
+      AVG(toFloat64(a.tcp_dl_avg_rtt_long_times)),
+      AVG(toFloat64(a.total_user_times)),
+      AVG(toFloat64(a.total_user_abnormal_times)),
+      AVG(toFloat64(a.http_ul_traffic)),
+      AVG(toFloat64(a.http_dl_traffic)),
+      AVG(toFloat64(a.http_req_times)),
+      AVG(toFloat64(a.http_rsp_succ_times)),
+      AVG(toFloat64(a.http_rsp_fail_times)),
+      AVG(toFloat64(a.http_rsp_total_delay)),
+      AVG(toFloat64(a.http_dl_big_packet_total_traffic)),
+      AVG(toFloat64(a.http_dl_big_packet_total_delay)),
+      AVG(toFloat64(a.http_dl_big_packet_thrput_low_times)),
+      AVG(toFloat64(a.http_dl_big_packet_thrput_stat_times)),
+      AVG(toFloat64(a.http_tcp_ul_rtt_total_delay)),
+      AVG(toFloat64(a.http_tcp_dl_rtt_total_delay)),
+      AVG(toFloat64(a.http_tcp_ul_rtt_stat_times)),
+      AVG(toFloat64(a.http_tcp_dl_rtt_stat_times)),
+      AVG(toFloat64(a.http_tcp_ul_conn_total_delay)),
+      AVG(toFloat64(a.http_tcp_dl_conn_total_delay)),
+      AVG(toFloat64(a.http_ul_big_packet_total_traffic)),
+      AVG(toFloat64(a.http_ul_big_packet_total_delay)),
+      AVG(toFloat64(a.https_ul_traffic)),
+      AVG(toFloat64(a.https_dl_traffic)),
+      AVG(toFloat64(a.https_service_times)),
+      AVG(toFloat64(a.https_dl_service_times)),
+      AVG(toFloat64(a.https_tcp_conn_req_times)),
+      AVG(toFloat64(a.http_tcp_ul_conn_succ_times)),
+      AVG(toFloat64(a.http_tcp_dl_conn_succ_times)),
+      AVG(toFloat64(a.http_dl_big_page_total_traffic)),
+      AVG(toFloat64(a.http_dl_big_page_total_delay)),
+      AVG(toFloat64(a.http_page_req_times)),
+      AVG(toFloat64(a.http_page_rsp_succ_times)),
+      AVG(toFloat64(a.http_page_rsp_fail_times)),
+      AVG(toFloat64(a.http_page_rsp_total_delay)),
+      AVG(toFloat64(a.http_tcp_ul_conn_fail_times)),
+      AVG(toFloat64(a.http_tcp_dl_conn_fail_times)),
+      AVG(toFloat64(a.http_tcp_conn_delay_long_times)),
+      AVG(toFloat64(a.http_tcp2fsttrans_delay_long_times)),
+      AVG(toFloat64(a.http_fstpkt_delay_long_times)),
+      AVG(toFloat64(a.http_rsp_delay_long_times)),
+      AVG(toFloat64(a.http_ul_big_packet_thrput_low_times)),
+      AVG(toFloat64(a.http_ul_big_packet_num)),
+      AVG(toFloat64(a.http_dl_big_packet_num)),
+      AVG(toFloat64(a.https_tcp_conn_succ_times)),
+      AVG(toFloat64(a.https_tcp_ul_conn_fail_times)),
+      AVG(toFloat64(a.https_tcp_dl_conn_fail_times)),
+      AVG(toFloat64(a.https_tcp_conn_total_delay)),
+      AVG(toFloat64(a.https_tcp_ul_conn_total_delay)),
+      AVG(toFloat64(a.https_tcp_dl_conn_total_delay)),
+      AVG(toFloat64(a.https_tcp_conn_delay_stat_times)),
+      AVG(toFloat64(a.https_tcp_ul_rtt_total_delay)),
+      AVG(toFloat64(a.https_tcp_dl_rtt_total_delay)),
+      AVG(toFloat64(a.https_tcp_ul_rtt_stat_times)),
+      AVG(toFloat64(a.https_tcp_dl_rtt_stat_times)),
+      AVG(toFloat64(a.https_tcp_conn_delay_long_times)),
+      AVG(toFloat64(a.https_tcp2fsttrans_delay_long_times)),
+      AVG(toFloat64(a.https_fstpkt_delay_long_times)),
+      AVG(toFloat64(a.https_conn_fail_times)),
+      AVG(toFloat64(a.https_dl_big_packet_thrput_low_times)),
+      AVG(toFloat64(a.https_ul_big_packet_thrput_low_times)),
+      AVG(toFloat64(a.video_xdr_count)),
+      AVG(toFloat64(a.video_ul_traffic)),
+      AVG(toFloat64(a.video_dl_traffic)),
+      AVG(toFloat64(a.video_hd_ul_traffic)),
+      AVG(toFloat64(a.video_hd_dl_traffic)),
+      AVG(toFloat64(a.video_intbuffer_req_times)),
+      AVG(toFloat64(a.video_intbuffer_succ_times)),
+      AVG(toFloat64(a.video_intbuffer_suc_delay)),
+      AVG(toFloat64(a.video_dl_packets)),
+      AVG(toFloat64(a.video_dl_delay)),
+      AVG(toFloat64(a.video_play_duration)),
+      AVG(toFloat64(a.video_stall_num)),
+      AVG(toFloat64(a.video_stall_duration)),
+      AVG(toFloat64(a.video_tcp_ul_rtt_total_delay)),
+      AVG(toFloat64(a.video_tcp_dl_rtt_total_delay)),
+      AVG(toFloat64(a.video_tcp_ul_rtt_stat_times)),
+      AVG(toFloat64(a.video_tcp_dl_rtt_stat_times)),
+      AVG(toFloat64(a.video_dl_thrput_low_times)),
+      AVG(toFloat64(a.video_dl_thrput_codecrate_good_times)),
+      AVG(toFloat64(a.video_dl_thrput_codecrate_stat_times)),
+      AVG(toFloat64(a.video_total_dura)),
+      AVG(toFloat64(a.video_dl_traffic_1080)),
+      AVG(toFloat64(a.video_ul_traffic_1080)),
+      AVG(toFloat64(a.video_play_duration_1080)),
+      AVG(toFloat64(a.video_delay_1080)),
+      AVG(toFloat64(a.video_dl_packets_1080)),
+      AVG(toFloat64(a.video_dl_delay_1080)),
+      AVG(toFloat64(a.video_stall_num_1080)),
+      AVG(toFloat64(a.video_intbuffer_succ_times_1080)),
+      AVG(toFloat64(a.video_intbuffer_req_times_1080)),
+      AVG(toFloat64(a.video_tcp_ul_rtt_stat_times_0_30)),
+      AVG(toFloat64(a.video_tcp_ul_rtt_stat_times_30_60)),
+      AVG(toFloat64(a.video_tcp_ul_rtt_stat_times_larger_60)),
+      AVG(toFloat64(a.video_tcp_dl_rtt_stat_times_0_50)),
+      AVG(toFloat64(a.video_tcp_dl_rtt_stat_times_50_150)),
+      AVG(toFloat64(a.video_tcp_dl_rtt_stat_times_larger_150)),
+      AVG(toFloat64(a.video_tcp_conn_delay_long_times)),
+      AVG(toFloat64(a.video_ul_thrput_low_times)),
+      AVG(toFloat64(a.video_dl_packets_valid)),
+      AVG(toFloat64(a.video_dl_delay_valid)),
+      AVG(toFloat64(a.im_xdr_count)),
+      AVG(toFloat64(a.im_tcp_conn_req_times)),
+      AVG(toFloat64(a.im_tcp_conn_succ_times)),
+      AVG(toFloat64(a.im_tcp_ul_conn_fail_times)),
+      AVG(toFloat64(a.im_tcp_dl_conn_fail_times)),
+      AVG(toFloat64(a.im_tcp_conn_total_delay)),
+      AVG(toFloat64(a.im_ul_traffic)),
+      AVG(toFloat64(a.im_dl_traffic)),
+      AVG(toFloat64(a.im_tcp_ul_rtt_stat_times)),
+      AVG(toFloat64(a.im_tcp_dl_rtt_stat_times)),
+      AVG(toFloat64(a.im_tcp_ul_rtt_total_delay)),
+      AVG(toFloat64(a.im_tcp_dl_rtt_total_delay)),
+      AVG(toFloat64(a.im_tcp_ul_avg_rtt_long_times)),
+      AVG(toFloat64(a.im_tcp_dl_avg_rtt_long_times)),
+      AVG(toFloat64(a.im_login_req_times)),
+      AVG(toFloat64(a.im_login_succ_times)),
+      AVG(toFloat64(a.im_sendtext_req_times)),
+      AVG(toFloat64(a.im_sendtext_succ_times)),
+      AVG(toFloat64(a.im_sendpic_req_times)),
+      AVG(toFloat64(a.im_sendpic_succ_times)),
+      AVG(toFloat64(a.im_sendaudio_req_times)),
+      AVG(toFloat64(a.im_sendaudio_succ_times)),
+      AVG(toFloat64(a.im_sendvideo_req_times)),
+      AVG(toFloat64(a.im_sendvideo_succ_times)),
+      AVG(toFloat64(a.im_tcp_ul_rtt_stat_times_0_30)),
+      AVG(toFloat64(a.im_tcp_ul_rtt_stat_times_30_60)),
+      AVG(toFloat64(a.im_tcp_ul_rtt_stat_times_larger_60)),
+      AVG(toFloat64(a.im_tcp_dl_rtt_stat_times_0_50)),
+      AVG(toFloat64(a.im_tcp_dl_rtt_stat_times_50_150)),
+      AVG(toFloat64(a.im_tcp_dl_rtt_stat_times_larger_150)),
+      AVG(toFloat64(a.im_pay_dl_rtt_total_delay)),
+      AVG(toFloat64(a.im_pay_ul_rtt_total_delay)),
+      AVG(toFloat64(a.im_http_tcp_conn_delay_long_times)),
+      AVG(toFloat64(a.im_https_tcp_conn_delay_long_times)),
+      AVG(toFloat64(a.im_pay_ul_avg_rtt_long_times)),
+      AVG(toFloat64(a.im_pay_dl_avg_rtt_long_times)),
+      AVG(toFloat64(a.game_tcp_conn_req_times)),
+      AVG(toFloat64(a.game_tcp_conn_succ_times)),
+      AVG(toFloat64(a.game_tcp_conn_total_delay)),
+      AVG(toFloat64(a.game_tcp_ul_conn_fail_times)),
+      AVG(toFloat64(a.game_tcp_dl_conn_fail_times)),
+      AVG(toFloat64(a.game_ul_traffic)),
+      AVG(toFloat64(a.game_dl_traffic)),
+      AVG(toFloat64(a.game_total_dura)),
+      AVG(toFloat64(a.game_dura_stat_times)),
+      AVG(toFloat64(a.game_battle_total_dura)),
+      AVG(toFloat64(a.game_battle_stat_times)),
+      AVG(toFloat64(a.game_tcp_ul_rtt_total_delay)),
+      AVG(toFloat64(a.game_tcp_dl_rtt_total_delay)),
+      AVG(toFloat64(a.game_tcp_ul_rtt_stat_times)),
+      AVG(toFloat64(a.game_tcp_dl_rtt_stat_times)),
+      AVG(toFloat64(a.game_tcp_ul_rtt_stat_times_0_30)),
+      AVG(toFloat64(a.game_tcp_ul_rtt_stat_times_30_60)),
+      AVG(toFloat64(a.game_tcp_ul_rtt_stat_times_larger_60)),
+      AVG(toFloat64(a.game_tcp_dl_rtt_stat_times_0_50)),
+      AVG(toFloat64(a.game_tcp_dl_rtt_stat_times_50_150)),
+      AVG(toFloat64(a.game_tcp_dl_rtt_stat_times_larger_150)),
+      AVG(toFloat64(a.game_udp_ul_avg_interval_total)),
+      AVG(toFloat64(a.game_udp_dl_avg_interval_total)),
+      AVG(toFloat64(a.game_login_req_times)),
+      AVG(toFloat64(a.game_login_succ_times)),
+      AVG(toFloat64(a.game_tcp_ul_avg_rtt_long_times)),
+      AVG(toFloat64(a.game_tcp_dl_avg_rtt_long_times)),
+      AVG(toFloat64(a.dns_qurey_req_times)),
+      AVG(toFloat64(a.dns_qurey_succ_times)),
+      AVG(toFloat64(a.dns_query_fail_times)),
+      AVG(toFloat64(a.dns_qurey_total_delay)),
+      AVG(toFloat64(a.dns_qurey_delay_beyond_times)),
+      AVG(toFloat64(a.game_udp_ul_avg_jitter_total)),
+      AVG(toFloat64(a.game_udp_dl_avg_jitter_total)),
+      AVG(toFloat64(a.game_udp_ul_avg_jitter_times)),
+      AVG(toFloat64(a.game_udp_dl_avg_jitter_times)),
+      AVG(toFloat64(a.game_stall_times)),
+      AVG(toFloat64(a.tcp_dl_server_probe_lost_pkt)),
+      AVG(toFloat64(a.tcp_dl_user_probe_lost_pkt)),
+      AVG(toFloat64(a.tcp_ul_user_probe_lost_pkt)),
+      AVG(toFloat64(a.tcp_ul_server_probe_lost_pkt)),
+      AVG(toFloat64(a.im_xdr_dura)),
+      AVG(toFloat64(a.im_service_succ_times)),
+      AVG(toFloat64(a.im_login_succ_total_delay)),
+      AVG(toFloat64(a.http_trans_dura)),
+      AVG(toFloat64(a.http_tcp_conn_req_times)),
+      AVG(toFloat64(a.http_total_dura)),
+      AVG(toFloat64(a.tcp_ul_rtt_long_times)),
+      AVG(toFloat64(a.tcp_dl_rtt_long_times)),
+      AVG(toFloat64(a.video_service_succ_times)),
+      AVG(toFloat64(a.video_service_level0_stall_times)),
+      AVG(toFloat64(a.video_service_level1_stall_times)),
+      AVG(toFloat64(a.video_service_level2_stall_times)),
+      AVG(toFloat64(a.traffic_23g)),
+      AVG(toFloat64(a.traffic_4g)),
+      AVG(toFloat64(a.traffic_5g)),
+      AVG(toFloat64(a.http_home_page_rsp_times)),
+      AVG(toFloat64(a.https_home_page_rsp_times)),
+      AVG(toFloat64(a.http_dl_big_packet_total_times)),
+      AVG(toFloat64(a.http_ul_big_packet_total_times)),
+      AVG(toFloat64(a.https_dl_big_packet_total_times)),
+      AVG(toFloat64(a.https_ul_big_packet_total_times)),
+      AVG(toFloat64(a.https_ul_big_packet_total_traffic)),
+      AVG(toFloat64(a.https_ul_big_packet_total_delay)),
+      AVG(toFloat64(a.https_dl_big_packet_total_traffic)),
+      AVG(toFloat64(a.https_dl_big_packet_total_delay)),
+      AVG(toFloat64(a.https_service_succ_times)),
+      AVG(toFloat64(a.https_little_page_service_times)),
+      AVG(toFloat64(a.https_little_page_rsp_succ_times)),
+      AVG(toFloat64(a.http_little_page_rsp_succ_times)),
+      AVG(toFloat64(a.http_little_page_rsp_long_times)),
+      AVG(toFloat64(a.video_big_packet_down_times)),
+      AVG(toFloat64(a.video_intbuffer_long_times)),
+      AVG(toFloat64(a.game_udp_ul_avg_interval_times)),
+      AVG(toFloat64(a.game_udp_dl_avg_interval_times)),
+      AVG(toFloat64(a.im_dl_small_packet_times)),
+      AVG(toFloat64(a.im_dl_small_packet_long_times)),
+      AVG(toFloat64(a.im_duration_long_times)),
+      AVG(toFloat64(a.im_ul_conn_delay_long_times)),
+      AVG(toFloat64(a.im_dl_conn_delay_long_times)),
+      AVG(toFloat64(a.im_pay_ul_rtt_stat_times)),
+      AVG(toFloat64(a.im_pay_dl_rtt_stat_times)),
+      AVG(toFloat64(a.video_ul_traffic_valid)),
+      AVG(toFloat64(a.video_ul_delay_valid)),
+      AVG(toFloat64(a.video_tcp_dl_rtt_stat_times_gt_600)),
+      AVG(toFloat64(a.cell_operator)),
+      AVG(toFloat64(a.user_5g_terminal_flag)),
+      AVG(toFloat64(a.http_res_1xx)),
+      AVG(toFloat64(a.http_res_2xx)),
+      AVG(toFloat64(a.http_res_3xx)),
+      AVG(toFloat64(a.http_res_4xx)),
+      AVG(toFloat64(a.http_res_5xx)),
+      AVG(toFloat64(a.http_res_200)),
+      AVG(toFloat64(a.http_res_206)),
+      AVG(toFloat64(a.http_res_404)),
+      AVG(toFloat64(a.http_res_505)),
+      AVG(toFloat64(a.http_res_100)),
+      AVG(toFloat64(a.http_res_101)),
+      AVG(toFloat64(a.http_res_201)),
+      AVG(toFloat64(a.http_res_202)),
+      AVG(toFloat64(a.http_res_203)),
+      AVG(toFloat64(a.http_res_204)),
+      AVG(toFloat64(a.http_res_205)),
+      AVG(toFloat64(a.http_res_300)),
+      AVG(toFloat64(a.http_res_301)),
+      AVG(toFloat64(a.http_res_302)),
+      AVG(toFloat64(a.http_res_303)),
+      AVG(toFloat64(a.http_res_304)),
+      AVG(toFloat64(a.http_res_305)),
+      AVG(toFloat64(a.http_res_307)),
+      AVG(toFloat64(a.http_res_400)),
+      AVG(toFloat64(a.http_res_401)),
+      AVG(toFloat64(a.http_res_402)),
+      AVG(toFloat64(a.http_res_403)),
+      AVG(toFloat64(a.http_res_405)),
+      AVG(toFloat64(a.http_res_406)),
+      AVG(toFloat64(a.http_res_407)),
+      AVG(toFloat64(a.http_res_408)),
+      AVG(toFloat64(a.http_res_409)),
+      AVG(toFloat64(a.http_res_410)),
+      AVG(toFloat64(a.http_res_411)),
+      AVG(toFloat64(a.http_res_412)),
+      AVG(toFloat64(a.http_res_413)),
+      AVG(toFloat64(a.http_res_414)),
+      AVG(toFloat64(a.http_res_415)),
+      AVG(toFloat64(a.http_res_416)),
+      AVG(toFloat64(a.http_res_417)),
+      AVG(toFloat64(a.http_res_500)),
+      AVG(toFloat64(a.http_res_501)),
+      AVG(toFloat64(a.http_res_502)),
+      AVG(toFloat64(a.http_res_503)),
+      AVG(toFloat64(a.http_res_504)),
+      AVG(toFloat64(a.http_res_ext)),
+      AVG(toFloat64(a.http_res_nores)),
+      AVG(toFloat64(a.dns_qurey_format_err_times)),
+      AVG(toFloat64(a.dns_qurey_server_fail_times)),
+      AVG(toFloat64(a.dns_qurey_name_err_times)),
+      AVG(toFloat64(a.dns_qurey_not_imple_times)),
+      AVG(toFloat64(a.dns_qurey_refused_times)),
+      AVG(toFloat64(a.dns_qurey_norsp_times)),
+      AVG(toFloat64(a.coap_res_201)),
+      AVG(toFloat64(a.coap_res_202)),
+      AVG(toFloat64(a.coap_res_203)),
+      AVG(toFloat64(a.coap_res_204)),
+      AVG(toFloat64(a.coap_res_205)),
+      AVG(toFloat64(a.coap_res_400)),
+      AVG(toFloat64(a.coap_res_401)),
+      AVG(toFloat64(a.coap_res_402)),
+      AVG(toFloat64(a.coap_res_403)),
+      AVG(toFloat64(a.coap_res_404)),
+      AVG(toFloat64(a.coap_res_405)),
+      AVG(toFloat64(a.coap_res_406)),
+      AVG(toFloat64(a.coap_res_412)),
+      AVG(toFloat64(a.coap_res_415)),
+      AVG(toFloat64(a.coap_res_500)),
+      AVG(toFloat64(a.coap_res_501)),
+      AVG(toFloat64(a.coap_res_502)),
+      AVG(toFloat64(a.coap_res_503)),
+      AVG(toFloat64(a.coap_res_504)),
+      AVG(toFloat64(a.coap_res_505)),
+      AVG(toFloat64(a.coap_res_4x)),
+      AVG(toFloat64(a.coap_res_5x)),
+      AVG(toFloat64(a.coap_res_6x)),
+      AVG(toFloat64(a.coap_res_timeout)),
+      AVG(toFloat64(a.mqtt_con_result_0)),
+      AVG(toFloat64(a.mqtt_con_result_1)),
+      AVG(toFloat64(a.mqtt_con_result_2)),
+      AVG(toFloat64(a.mqtt_con_result_3)),
+      AVG(toFloat64(a.mqtt_con_result_4)),
+      AVG(toFloat64(a.mqtt_con_result_5)),
+      AVG(toFloat64(a.mqtt_con_result_other)),
+      AVG(toFloat64(a.video_tcp_conn_req_times)),
+      AVG(toFloat64(a.video_tcp_conn_succ_times)),
+      AVG(toFloat64(a.video_tcp_conn_total_delay)),
+      AVG(toFloat64(a.video_streaming_play_fail_times)),
+      AVG(toFloat64(a.tcp_ul_retrans_ratio_high_times)),
+      AVG(toFloat64(a.tcp_dl_retrans_ratio_high_times)),
+      AVG(toFloat64(a.im_sendtext_succtotal_delay)),
+      AVG(toFloat64(a.im_ul_effect_traffic)),
+      AVG(toFloat64(a.im_ul_effect_datatrans_dura)),
+      AVG(toFloat64(a.im_dl_effect_traffic)),
+      AVG(toFloat64(a.im_dl_effect_datatrans_dura)),
+      AVG(toFloat64(a.game_ul_effect_datatrans_dura)),
+      AVG(toFloat64(a.game_dl_effect_datatrans_dura)),
+      AVG(toFloat64(a.other_ul_valid_dura)),
+      AVG(toFloat64(a.other_dl_valid_dura)),
+      AVG(toFloat64(a.other_ul_valid_traffic)),
+      AVG(toFloat64(a.other_dl_valid_traffic)),
+      AVG(toFloat64(a.http_ul_valid_traffic)),
+      AVG(toFloat64(a.http_dl_valid_traffic)),
+      AVG(toFloat64(a.https_ul_valid_traffic)),
+      AVG(toFloat64(a.https_dl_valid_traffic)),
+      AVG(toFloat64(a.http_ul_valid_dura)),
+      AVG(toFloat64(a.http_dl_valid_dura)),
+      AVG(toFloat64(a.https_ul_valid_dura)),
+      AVG(toFloat64(a.https_dl_valid_dura)),
+      AVG(toFloat64(a.http_tcp_ul_packet_num)),
+      AVG(toFloat64(a.http_tcp_dl_packet_num)),
+      AVG(toFloat64(a.http_tcp_ul_disord_packet_num)),
+      AVG(toFloat64(a.http_tcp_dl_disord_packet_num)),
+      AVG(toFloat64(a.http_tcp_ul_retrans_packet_num)),
+      AVG(toFloat64(a.http_tcp_dl_retrans_packet_num)),
+      AVG(toFloat64(a.http_fstpkt_delay)),
+      AVG(toFloat64(a.https_fstpkt_delay)),
+      AVG(toFloat64(a.http_fstpkt_delay_stat_times)),
+      AVG(toFloat64(a.https_fstpkt_delay_stat_times)),
+      AVG(toFloat64(a.http_tcp_conn_total_delay)),
+      AVG(toFloat64(a.http_dura_stat_times))
+  from SERV_CELL_APP a
+  where month_id = '{month_id}' and h_city = '{area_name}'
+  group by substring(a.batch_no,1,6), a.msisdn,h_city
+) cell_app
+on cell_app.month_id = t.month_id
+and cell_app.device_number = t.device_number 
+and cell_app.h_city = t.area_name)
